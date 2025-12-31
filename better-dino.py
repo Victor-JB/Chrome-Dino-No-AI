@@ -3,17 +3,22 @@ import numpy as np
 import cv2
 import mss
 import pyautogui
+import argparse
 
-DINO_X = 580
+p = argparse.ArgumentParser(description="Config")
+p.add_argument("--invert", action="store_true", help="Toggle if on dark mode")
+args = p.parse_args()
+
+DINO_X = 580.0
 DINO_Y = 240
 DINO_WIDTH = 600
 DINO_HEIGHT = 155
 
 # --- Trigger ROI (ahead of dino) ---
-DETECT_X_REL = 43
-STRIP_W = 110
-STRIP_H_OFFSET = 60
-STRIP_H = 50
+DETECT_X_REL = 83
+STRIP_W = 33
+STRIP_H_OFFSET = 80
+STRIP_H = 30
 
 # --- Added: Danger ROI (near dino front) ---
 # This is the "don't descend into obstacle" safety check.
@@ -24,10 +29,10 @@ DANGER_H = STRIP_H
 
 # --- Added: Lookahead ROI (optional) ---
 # Helps decide if there’s another obstacle soon, so dropping is useful.
-LOOK_X_REL = 200
-LOOK_W = 120
-LOOK_Y_OFFSET = STRIP_H_OFFSET
-LOOK_H = STRIP_H
+LOOK_X_REL = DETECT_X_REL + STRIP_W
+LOOK_W = 450
+LOOK_Y_OFFSET = STRIP_H_OFFSET - 30
+LOOK_H = STRIP_H + 30
 
 WINDOW_NAME = "game_render"
 JUMP_KEY = "space"
@@ -36,8 +41,8 @@ JUMP_KEY = "space"
 DARK_THR = 100
 
 # timings
-MIN_AIR_TIME = 0.17  # don't drop immediately after jump
-DROP_HOLD = 0.03  # how long to hold DOWN to force descent
+MIN_AIR_TIME = 0.09  # don't drop immediately after jump
+DROP_HOLD = 0.04  # how long to hold DOWN to force descent
 
 
 def roi_hit(frame, x_rel, w, y_off, h, thr=DARK_THR):
@@ -50,6 +55,7 @@ def roi_hit(frame, x_rel, w, y_off, h, thr=DARK_THR):
     if roi.size == 0:
         return False, (x1, y1, x2, y2)
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    gray = 255 - gray if args.invert else gray
     return bool(np.any(gray < thr)), (x1, y1, x2, y2)
 
 
