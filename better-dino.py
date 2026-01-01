@@ -28,11 +28,11 @@ LOOK_Y_OFF = 70
 LOOK_H = 50
 
 # Base trigger x (where you'd jump for "normal" cactus)
-SMALL_JUMP_X = 158
-LARGE_JUMP_X = 140
+SMALL_JUMP_X = 150
+LARGE_JUMP_X = 130
 
 # Width classification and trigger adjustment
-LARGE_PX = 5
+LARGE_PX = 45
 
 # Column hit heuristic: column counts as "occupied" if >= this fraction are obstacle pixels
 COL_HIT_FRAC = 0.4
@@ -44,6 +44,12 @@ JUMP_KEY = "space"
 # Fast drop (DOWN) parameters
 MIN_AIR_TIME = 0.09
 DROP_HOLD = 0.04
+
+OCC_THRESH = 0.12
+
+# Bridge gaps up to this many columns so "forests" become one blob.
+# Start 6–12; raise if forests fragment, lower if separate obstacles merge too much.
+GAP_PX = 4
 
 # Safe x: only fast-drop once obstacle trailing edge is left of this x
 SAFE_CLEAR_X = 100  # near dino front; tune (20-40)
@@ -62,28 +68,64 @@ def get_roi(game_frame, x_rel, w, y_off, h):
     return game_frame[y1:y2, x1:x2], (x1, y1, x2, y2)
 
 
+def _column_occupancy_frac(roi_bgr: np.ndarray, thr: int, invert: bool) -> np.ndarray:
+    """
+    Returns a 1D float array of shape (roi_width,) where each value is the fraction (0..1)
+    of obstacle-like pixels in that column.
+    """
+    gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    if invert:
+        gray = 255 - gray
+    mask = gray < thr  # True = obstacle-like pixel
+    return mask.mean(axis=0)  # fraction per column
+
+
+def _close_1d(col_hit: np.ndarray, gap_px: int) -> np.ndarray:
+    """
+    1D morphological closing (dilate then erode) to bridge small gaps in col_hit.
+    This helps treat cactus "forests" as one contiguous obstacle block.
+    """
+    if gap_px <= 1:
+        return col_hit.astype(bool)
+
+    a = col_hit.astype(np.uint8)  # 0/1
+    k = np.ones((gap_px,), np.uint8)
+    a = cv2.dilate(a, k, iterations=1)
+    a = cv2.erode(a, k, iterations=1)
+    return a.astype(bool)
+
+
 def detect_next_obstacle_block(game_frame):
     """
     Returns None or dict:
       {"lead_x": int, "trail_x": int, "width_px": int, "rect": (x1,y1,x2,y2)}
     All x are in GAME-FRAME coordinates.
+
+    What it does:
+    1) Crops the lookahead ROI.
+    2) Builds a 1D "occupied columns" signal based on occupancy fraction.
+    3) Bridges small gaps in that 1D signal (so cactus clusters count as one obstacle).
+    4) Finds the first contiguous run = "next obstacle block" and returns its width + edges.
     """
     roi, rect = get_roi(game_frame, LOOK_X_REL, LOOK_W, LOOK_Y_OFF, LOOK_H)
     if roi.size == 0:
         return None
 
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    if args.invert:
-        gray = 255 - gray
+    # 1D occupancy signal across x (0..1 fraction of obstacle-like pixels per column)
+    occ = _column_occupancy_frac(roi, thr=DARK_THR, invert=args.invert)
 
-    mask = gray < DARK_THR
-    col_frac = mask.mean(axis=0)
-    col_hit = col_frac >= COL_HIT_FRAC
+    # Column is "hit" if enough of that column is obstacle-like
+    col_hit = occ >= OCC_THRESH
 
+    # Bridge small gaps so "forests" of cacti don't fragment into multiple small runs
+    col_hit = _close_1d(col_hit, gap_px=GAP_PX)
+
+    # Find first occupied column
     idx = np.flatnonzero(col_hit)
     if idx.size == 0:
         return None
 
+    # Find contiguous run starting at first hit => the "next obstacle block"
     lead = int(idx[0])
     trail = lead
     while trail + 1 < col_hit.shape[0] and col_hit[trail + 1]:
@@ -95,10 +137,10 @@ def detect_next_obstacle_block(game_frame):
 
     x1, y1, x2, y2 = rect
     return {
-        "lead_x": x1 + lead,
-        "trail_x": x1 + trail,
-        "width_px": width_px,
-        "rect": rect,
+        "lead_x": x1 + lead,  # game-frame x where obstacle starts
+        "trail_x": x1 + trail,  # game-frame x where obstacle ends
+        "width_px": width_px,  # obstacle width in pixels (after gap-bridging)
+        "rect": rect,  # (x1,y1,x2,y2) ROI bounds in game-frame coords
     }
 
 
